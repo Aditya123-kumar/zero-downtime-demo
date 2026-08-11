@@ -4,20 +4,22 @@ set -e
 
 IMAGE="zero-downtime-demo-app"
 NETWORK="zero-downtime-demo_default"
-NGINX_CONTAINER="demo-nginx"
 NGINX_CONFIG="nginx/nginx.conf"
+NGINX_CONTAINER="demo-nginx"
 
 echo "======================================"
 echo " Zero Downtime Deployment"
 echo "======================================"
 
-# 1. Build new Docker image
+# 1. Build image
+
 echo "[1/6] Building Docker image..."
 
 docker build -t "$IMAGE:latest" .
 
-# 2. Detect current and new version
-CURRENT=$(grep -oE 'server demo-v[12]:5000' "$NGINX_CONFIG" | grep -oE 'demo-v[12]' || true)
+# 2. Detect current version
+
+CURRENT=$(grep -oE 'demo-v[12]:5000' "$NGINX_CONFIG" | head -1 | cut -d: -f1)
 
 if [ "$CURRENT" = "demo-v1" ]; then
     NEW="demo-v2"
@@ -29,6 +31,7 @@ echo "Current version: $CURRENT"
 echo "New version: $NEW"
 
 # 3. Start new version
+
 echo "[2/6] Starting $NEW..."
 
 docker rm -f "$NEW" 2>/dev/null || true
@@ -40,6 +43,7 @@ docker run -d \
     "$IMAGE:latest"
 
 # 4. Health check
+
 echo "[3/6] Checking health..."
 
 HEALTHY=false
@@ -47,11 +51,11 @@ HEALTHY=false
 for i in {1..30}
 do
     if docker exec "$NEW" python -c \
-        "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" \
-        >/dev/null 2>&1
+    "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" \
+    >/dev/null 2>&1
     then
         HEALTHY=true
-        echo "✅ New version is healthy!"
+        echo "New version is healthy!"
         break
     fi
 
@@ -59,12 +63,12 @@ do
     sleep 2
 done
 
-# Rollback if health check fails
 if [ "$HEALTHY" != "true" ]; then
-    echo "❌ Health check failed."
+
+    echo "Health check failed."
     echo "Rolling back..."
 
-    docker logs "$NEW"
+    docker logs "$NEW" || true
     docker rm -f "$NEW" 2>/dev/null || true
 
     echo "Rollback completed."
@@ -72,33 +76,30 @@ if [ "$HEALTHY" != "true" ]; then
 fi
 
 # 5. Switch Nginx traffic
+
 echo "[4/6] Switching traffic to $NEW..."
 
-# Backup current Nginx configuration
 cp "$NGINX_CONFIG" "$NGINX_CONFIG.backup"
 
-# Change old version to new version
 sed -i "s/server $CURRENT:5000;/server $NEW:5000;/" "$NGINX_CONFIG"
 
-# Test Nginx configuration
-if docker exec "$NGINX_CONTAINER" nginx -t; then
+echo "Testing Nginx configuration..."
 
-    # IMPORTANT:
-    # nginx.conf is mounted from the host,
-    # so we DO NOT use docker cp.
+if docker exec "$NGINX_CONTAINER" nginx -t
+then
 
     docker exec "$NGINX_CONTAINER" nginx -s reload
 
-    echo "✅ Traffic switched to $NEW."
+    echo "Traffic switched to $NEW."
 
 else
 
-    echo "❌ Nginx configuration failed."
+    echo "Nginx configuration failed."
     echo "Rolling back..."
 
     cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
 
-    docker exec "$NGINX_CONTAINER" nginx -s reload
+    docker exec "$NGINX_CONTAINER" nginx -s reload || true
 
     docker rm -f "$NEW" 2>/dev/null || true
 
@@ -106,23 +107,23 @@ else
     exit 1
 fi
 
-# 6. Test application through Nginx
+# 6. Verify application
+
 echo "[5/6] Testing application..."
 
 sleep 2
 
-if curl -f http://localhost:8080/ >/dev/null 2>&1; then
-
-    echo "✅ Application is responding."
-
+if curl -f http://localhost:8082/ >/dev/null 2>&1
+then
+    echo "Application is responding."
 else
 
-    echo "❌ Application test failed."
+    echo "Application test failed."
     echo "Rolling back..."
 
     cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
 
-    docker exec "$NGINX_CONTAINER" nginx -s reload
+    docker exec "$NGINX_CONTAINER" nginx -s reload || true
 
     docker rm -f "$NEW" 2>/dev/null || true
 
@@ -130,7 +131,8 @@ else
     exit 1
 fi
 
-# 7. Remove old container
+# Remove old version
+
 echo "[6/6] Cleaning up old version..."
 
 docker rm -f "$CURRENT" 2>/dev/null || true
@@ -139,6 +141,6 @@ rm -f "$NGINX_CONFIG.backup"
 
 echo ""
 echo "======================================"
-echo "✅ Deployment successful!"
-echo "Live version: $NEW"
+echo " Deployment successful!"
+echo " Live version: $NEW"
 echo "======================================"

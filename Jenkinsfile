@@ -20,15 +20,22 @@ pipeline {
         stage('Deploy') {
             steps {
                 echo 'Starting zero-downtime deployment...'
+
                 sh 'chmod +x deploy.sh'
-                sh './deploy.sh'
+
+                sh '''
+                    ./deploy.sh
+                '''
             }
         }
 
         stage('Verify') {
             steps {
                 echo 'Verifying application...'
-                sh 'curl -f http://demo-nginx/ || exit 1'
+
+                sh '''
+                    curl -f http://host.docker.internal:8082/ || exit 1
+                '''
             }
         }
     }
