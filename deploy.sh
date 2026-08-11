@@ -19,12 +19,12 @@ docker build -t "$IMAGE:latest" .
 
 # 2. Detect current version
 
-CURRENT=$(grep -oE 'demo-v[12]:5000' "$NGINX_CONFIG" | head -1 | cut -d: -f1)
+CURRENT=$(grep -oE 'server demo-v[12]:5000;' "$NGINX_CONFIG" | head -1 | grep -oE 'demo-v[12]')
 
 if [ "$CURRENT" = "demo-v1" ]; then
-    NEW="demo-v2"
+NEW="demo-v2"
 else
-    NEW="demo-v1"
+NEW="demo-v1"
 fi
 
 echo "Current version: $CURRENT"
@@ -36,11 +36,11 @@ echo "[2/6] Starting $NEW..."
 
 docker rm -f "$NEW" 2>/dev/null || true
 
-docker run -d \
-    --name "$NEW" \
-    --network "$NETWORK" \
-    -e VERSION="$NEW" \
-    "$IMAGE:latest"
+docker run -d 
+--name "$NEW" 
+--network "$NETWORK" 
+-e VERSION="$NEW" 
+"$IMAGE:latest"
 
 # 4. Health check
 
@@ -50,29 +50,34 @@ HEALTHY=false
 
 for i in {1..30}
 do
-    if docker exec "$NEW" python -c \
-    "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')" \
-    >/dev/null 2>&1
-    then
-        HEALTHY=true
-        echo "New version is healthy!"
-        break
-    fi
+if docker exec "$NEW" python -c 
+"import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)" 
+>/dev/null 2>&1
+then
+HEALTHY=true
+echo "New version is healthy!"
+break
+fi
 
-    echo "Waiting for application... ($i/30)"
-    sleep 2
+```
+echo "Waiting for application... ($i/30)"
+sleep 2
+```
+
 done
 
 if [ "$HEALTHY" != "true" ]; then
+echo "Health check failed."
+echo "Rolling back..."
 
-    echo "Health check failed."
-    echo "Rolling back..."
+```
+docker logs "$NEW" || true
+docker rm -f "$NEW" 2>/dev/null || true
 
-    docker logs "$NEW" || true
-    docker rm -f "$NEW" 2>/dev/null || true
+echo "Rollback completed."
+exit 1
+```
 
-    echo "Rollback completed."
-    exit 1
 fi
 
 # 5. Switch Nginx traffic
@@ -87,48 +92,57 @@ echo "Testing Nginx configuration..."
 
 if docker exec "$NGINX_CONTAINER" nginx -t
 then
+docker exec "$NGINX_CONTAINER" nginx -s reload
 
-    docker exec "$NGINX_CONTAINER" nginx -s reload
-
-    echo "Traffic switched to $NEW."
+```
+echo "Traffic switched to $NEW."
+```
 
 else
+echo "Nginx configuration failed."
+echo "Rolling back..."
 
-    echo "Nginx configuration failed."
-    echo "Rolling back..."
+```
+cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
 
-    cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
+docker exec "$NGINX_CONTAINER" nginx -s reload || true
 
-    docker exec "$NGINX_CONTAINER" nginx -s reload || true
+docker rm -f "$NEW" 2>/dev/null || true
 
-    docker rm -f "$NEW" 2>/dev/null || true
+echo "Rollback completed."
+exit 1
+```
 
-    echo "Rollback completed."
-    exit 1
 fi
 
-# 6. Verify application
+# 6. Verify traffic through Nginx
 
-echo "[5/6] Testing application..."
+echo "[5/6] Testing application through Nginx..."
 
 sleep 2
 
-if curl -f http://localhost:8082/ >/dev/null 2>&1
+if docker run --rm 
+--network "$NETWORK" 
+python:3.12-slim 
+python -c 
+"import urllib.request; r=urllib.request.urlopen('http://demo-nginx/', timeout=5); print(r.read().decode()); exit(0 if r.status == 200 else 1)"
 then
-    echo "Application is responding."
+echo "Application is responding through Nginx."
 else
+echo "Application test failed."
+echo "Rolling back..."
 
-    echo "Application test failed."
-    echo "Rolling back..."
+```
+cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
 
-    cp "$NGINX_CONFIG.backup" "$NGINX_CONFIG"
+docker exec "$NGINX_CONTAINER" nginx -s reload || true
 
-    docker exec "$NGINX_CONTAINER" nginx -s reload || true
+docker rm -f "$NEW" 2>/dev/null || true
 
-    docker rm -f "$NEW" 2>/dev/null || true
+echo "Rollback completed."
+exit 1
+```
 
-    echo "Rollback completed."
-    exit 1
 fi
 
 # Remove old version
