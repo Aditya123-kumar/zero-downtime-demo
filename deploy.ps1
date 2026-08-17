@@ -77,7 +77,11 @@ Write-Host "$Current is ready."
 
 Write-Host "[4/6] Starting $New..."
 
-& $Docker rm -f $New 2>$null
+$existing = & $Docker ps -aq --filter "name=^$New$"
+
+if ($existing) {
+    & $Docker rm -f $New
+}
 
 & $Docker run -d `
     --name $New `
