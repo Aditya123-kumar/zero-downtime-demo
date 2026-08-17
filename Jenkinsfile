@@ -1,6 +1,10 @@
 pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     stages {
 
         stage('Checkout') {
@@ -9,20 +13,26 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Docker Test') {
             steps {
-                sh '''
-                    echo "Building Docker image..."
-                    sudo docker build -t zero-downtime-demo-app:latest .
+                powershell '''
+                    Write-Host "Checking Docker..."
+                    docker --version
+
+                    Write-Host "Checking Docker Compose..."
+                    docker compose version
+
+                    Write-Host "Checking Docker containers..."
+                    docker ps
                 '''
             }
         }
 
-        stage('Zero Downtime Deployment') {
+        stage('Build Docker Image') {
             steps {
-                sh '''
-                    chmod +x deploy.sh
-                    sudo ./deploy.sh
+                powershell '''
+                    Write-Host "Building Docker image..."
+                    docker build -t zero-downtime-demo-app:latest .
                 '''
             }
         }
@@ -30,11 +40,11 @@ pipeline {
 
     post {
         success {
-            echo 'Zero-downtime deployment completed successfully.'
+            echo 'GitHub, Docker and Docker build are working from Jenkins.'
         }
 
         failure {
-            echo 'Deployment failed.'
+            echo 'Pipeline failed.'
         }
     }
 }
