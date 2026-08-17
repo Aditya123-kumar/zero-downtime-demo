@@ -37,11 +37,21 @@ pipeline {
                 '''
             }
         }
+
+        stage('Zero Downtime Deployment') {
+            steps {
+                powershell '''
+                    Write-Host "Starting zero downtime deployment..."
+
+                    powershell -ExecutionPolicy Bypass -File .\\deploy.ps1
+                '''
+            }
+        }
     }
 
     post {
         success {
-            echo 'Jenkins can access Docker and build the image successfully.'
+            echo 'Zero downtime deployment completed successfully.'
         }
 
         failure {
