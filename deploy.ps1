@@ -99,23 +99,41 @@ Write-Host "$New container started."
 # 5. Health check
 # --------------------------------------------------
 
+# --------------------------------------------------
+# 5. Health check
+# --------------------------------------------------
+
 Write-Host "[5/6] Health checking $New..."
 
 $Healthy = $false
 
 for ($i = 1; $i -le 30; $i++) {
 
-    $healthResult = & $Docker exec $New python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).read().decode())" 2>&1
+    $healthOutput = Join-Path $env:TEMP "health-output.txt"
+    $healthError  = Join-Path $env:TEMP "health-error.txt"
 
-    if ($LASTEXITCODE -eq 0 -and $healthResult -match "OK") {
-        $Healthy = $true
-        Write-Host "$New is healthy!"
-        break
+    Remove-Item $healthOutput -ErrorAction SilentlyContinue
+    Remove-Item $healthError -ErrorAction SilentlyContinue
+
+    cmd.exe /c "docker exec $New python -c `"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).read().decode())`" 1>`"$healthOutput`" 2>`"$healthError`""
+
+    $exitCode = $LASTEXITCODE
+
+    if ($exitCode -eq 0) {
+
+        $healthResult = Get-Content $healthOutput -Raw -ErrorAction SilentlyContinue
+
+        if ($healthResult -match "OK") {
+            $Healthy = $true
+            Write-Host "$New is healthy!"
+            break
+        }
     }
 
     Write-Host "Waiting for application... ($i/30)"
     Start-Sleep -Seconds 2
 }
+
 if (-not $Healthy) {
 
     Write-Host "Health check failed."
