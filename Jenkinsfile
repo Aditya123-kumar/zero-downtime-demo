@@ -1,17 +1,40 @@
 pipeline {
-     agent any
-     stages {
-        stage("Build") {
+    agent any
+
+    stages {
+
+        stage('Checkout') {
             steps {
-                sh "sudo docker compose down --remove-orphans"
-                sh "sudo docker container prune --force"
-                sh "sudo docker image prune --force"
+                checkout scm
             }
         }
-        stage("Deploy") {
+
+        stage('Build Docker Image') {
             steps {
-                sh "sudo docker compose -f docker-compose.yml up --build --no-deps --renew-anon-volumes --detach --remove-orphans"
+                sh '''
+                    echo "Building Docker image..."
+                    sudo docker build -t zero-downtime-demo-app:latest .
+                '''
             }
+        }
+
+        stage('Zero Downtime Deployment') {
+            steps {
+                sh '''
+                    chmod +x deploy.sh
+                    sudo ./deploy.sh
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Zero-downtime deployment completed successfully.'
+        }
+
+        failure {
+            echo 'Deployment failed.'
         }
     }
 }
