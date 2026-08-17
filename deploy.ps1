@@ -105,7 +105,7 @@ $Healthy = $false
 
 for ($i = 1; $i -le 30; $i++) {
 
-    & $Docker exec $New python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=5)" 2>$null
+    & $Docker exec $New python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000', timeout=5)" 2>$null
 
     if ($LASTEXITCODE -eq 0) {
         $Healthy = $true
@@ -116,7 +116,6 @@ for ($i = 1; $i -le 30; $i++) {
     Write-Host "Waiting for application... ($i/30)"
     Start-Sleep -Seconds 2
 }
-
 if (-not $Healthy) {
 
     Write-Host "Health check failed."
