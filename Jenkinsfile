@@ -16,14 +16,13 @@ pipeline {
         stage('Docker Test') {
             steps {
                 powershell '''
-                    Write-Host "Checking Docker..."
-                    docker --version
+                    $docker = "C:\\Users\\CEREBRENT PC\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe"
 
-                    Write-Host "Checking Docker Compose..."
-                    docker compose version
+                    Write-Host "Checking Docker..."
+                    & $docker --version
 
                     Write-Host "Checking Docker containers..."
-                    docker ps
+                    & $docker ps
                 '''
             }
         }
@@ -31,8 +30,10 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 powershell '''
+                    $docker = "C:\\Users\\CEREBRENT PC\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe"
+
                     Write-Host "Building Docker image..."
-                    docker build -t zero-downtime-demo-app:latest .
+                    & $docker build -t zero-downtime-demo-app:latest .
                 '''
             }
         }
@@ -40,7 +41,7 @@ pipeline {
 
     post {
         success {
-            echo 'GitHub, Docker and Docker build are working from Jenkins.'
+            echo 'Jenkins can access Docker and build the image successfully.'
         }
 
         failure {
