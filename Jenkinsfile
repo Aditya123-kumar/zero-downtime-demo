@@ -1,52 +1,17 @@
 pipeline {
-    agent any
-
-    stages {
-
-        stage('Checkout') {
+     agent any
+     stages {
+        stage("Build") {
             steps {
-                echo 'Checking out project code...'
-                checkout scm
+                sh "sudo docker compose down --remove-orphans"
+                sh "sudo docker container prune --force"
+                sh "sudo docker image prune --force"
             }
         }
-
-        stage('Docker Build') {
+        stage("Deploy") {
             steps {
-                echo 'Building Docker image...'
-                sh 'docker build -t zero-downtime-demo-app:latest .'
+                sh "sudo docker compose -f docker-compose.yml up --build --no-deps --renew-anon-volumes --detach --remove-orphans"
             }
-        }
-
-        stage('Deploy') {
-            steps {
-                echo 'Starting zero-downtime deployment...'
-
-                sh 'chmod +x deploy.sh'
-
-                sh '''
-                    ./deploy.sh
-                '''
-            }
-        }
-
-        stage('Verify') {
-            steps {
-                echo 'Verifying application...'
-
-                sh '''
-                    curl -f http://host.docker.internal:8082/ || exit 1
-                '''
-            }
-        }
-    }
-
-    post {
-        success {
-            echo 'Deployment completed successfully!'
-        }
-
-        failure {
-            echo 'Deployment failed!'
         }
     }
 }
