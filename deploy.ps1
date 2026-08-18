@@ -41,7 +41,12 @@ Write-Host "[2/6] Checking Docker network..."
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creating Docker network..."
+
     & $Docker network create $Network
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create Docker network."
+    }
 }
 
 # --------------------------------------------------
@@ -50,9 +55,9 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "[3/6] Checking current application..."
 
-& $Docker ps --format "{{.Names}}" | Select-String "^$Current$" | Out-Null
+$CurrentRunning = & $Docker ps -q --filter "name=^$Current$"
 
-if ($LASTEXITCODE -ne 0) {
+if (-not $CurrentRunning) {
 
     Write-Host "$Current is not running. Starting it..."
 
@@ -67,6 +72,8 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) {
         throw "Could not start $Current"
     }
+
+    Start-Sleep -Seconds 2
 }
 
 Write-Host "$Current is ready."
@@ -80,6 +87,7 @@ Write-Host "[4/6] Starting $New..."
 $existing = & $Docker ps -aq --filter "name=^$New$"
 
 if ($existing) {
+    Write-Host "Removing existing $New container..."
     & $Docker rm -f $New
 }
 
@@ -99,35 +107,31 @@ Write-Host "$New container started."
 # 5. Health check
 # --------------------------------------------------
 
-# --------------------------------------------------
-# 5. Health check
-# --------------------------------------------------
-
 Write-Host "[5/6] Health checking $New..."
 
 $Healthy = $false
 
 for ($i = 1; $i -le 30; $i++) {
 
-    $healthOutput = Join-Path $env:TEMP "health-output.txt"
-    $healthError  = Join-Path $env:TEMP "health-error.txt"
+    # Check that container is still running
+    $Running = & $Docker ps -q --filter "name=^$New$"
 
-    Remove-Item $healthOutput -ErrorAction SilentlyContinue
-    Remove-Item $healthError -ErrorAction SilentlyContinue
+    if (-not $Running) {
+        Write-Host "$New container is not running."
+        break
+    }
 
-    cmd.exe /c "docker exec $New python -c `"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5).read().decode())`" 1>`"$healthOutput`" 2>`"$healthError`""
+    # Check application health endpoint
+    $healthResult = & $Docker exec $New python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5); print(r.status)" 2>&1
 
     $exitCode = $LASTEXITCODE
 
-    if ($exitCode -eq 0) {
+    Write-Host "Health check response: $healthResult"
 
-        $healthResult = Get-Content $healthOutput -Raw -ErrorAction SilentlyContinue
-
-        if ($healthResult -match "OK") {
-            $Healthy = $true
-            Write-Host "$New is healthy!"
-            break
-        }
+    if ($exitCode -eq 0 -and "$healthResult" -match "200") {
+        $Healthy = $true
+        Write-Host "$New is healthy!"
+        break
     }
 
     Write-Host "Waiting for application... ($i/30)"
@@ -137,9 +141,11 @@ for ($i = 1; $i -le 30; $i++) {
 if (-not $Healthy) {
 
     Write-Host "Health check failed."
+    Write-Host "Container logs:"
+    & $Docker logs $New
+
     Write-Host "Rolling back..."
 
-    & $Docker logs $New
     & $Docker rm -f $New
 
     throw "Deployment failed because health check failed."
@@ -179,7 +185,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nginx configuration test failed."
 }
 
+# Reload Nginx
 & $Docker exec $NginxContainer nginx -s reload
+
+if ($LASTEXITCODE -ne 0) {
+
+    Write-Host "Nginx reload failed."
+    Write-Host "Rolling back..."
+
+    Copy-Item $Backup $NginxConfig -Force
+
+    & $Docker exec $NginxContainer nginx -s reload
+
+    & $Docker rm -f $New
+
+    throw "Nginx reload failed."
+}
 
 Write-Host "Traffic switched to $New."
 
@@ -192,7 +213,7 @@ Write-Host "Testing application through Nginx..."
 & $Docker run --rm `
     --network $Network `
     python:3.12-slim `
-    python -c "import urllib.request; r=urllib.request.urlopen('http://$NginxContainer/', timeout=5); print(r.read().decode()); exit(0 if r.status == 200 else 1)"
+    python -c "import urllib.request; r=urllib.request.urlopen('http://$NginxContainer/', timeout=5); print('HTTP STATUS:', r.status); print(r.read().decode()); exit(0 if r.status == 200 else 1)"
 
 if ($LASTEXITCODE -ne 0) {
 
