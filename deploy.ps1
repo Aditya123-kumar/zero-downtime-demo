@@ -23,16 +23,19 @@ if ($config -match "server demo-v1:5000;") {
     $Current = "demo-v1"
     $New = "demo-v2"
 }
-else {
+elseif ($config -match "server demo-v2:5000;") {
     $Current = "demo-v2"
     $New = "demo-v1"
+}
+else {
+    throw "Could not detect current application version from nginx.conf"
 }
 
 Write-Host "Current version: $Current"
 Write-Host "New version: $New"
 
 # --------------------------------------------------
-# 2. Make sure Docker network exists
+# 2. Check network
 # --------------------------------------------------
 
 Write-Host "[2/6] Checking Docker network..."
@@ -40,6 +43,7 @@ Write-Host "[2/6] Checking Docker network..."
 & $Docker network inspect $Network *> $null
 
 if ($LASTEXITCODE -ne 0) {
+
     Write-Host "Creating Docker network..."
 
     & $Docker network create $Network
@@ -50,32 +54,72 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --------------------------------------------------
-# 3. Make sure current version exists
+# 3. Make sure Nginx is running
 # --------------------------------------------------
 
-Write-Host "[3/6] Checking current application..."
+Write-Host "[3/6] Checking Nginx..."
 
-$CurrentContainer = & $Docker ps -aq --filter "name=^$Current$"
+$NginxExists = & $Docker ps -aq --filter "name=^$NginxContainer$"
 
-if ($CurrentContainer) {
+if (-not $NginxExists) {
 
-    $CurrentRunning = & $Docker ps -q --filter "name=^$Current$"
+    Write-Host "Nginx container does not exist."
 
-    if ($CurrentRunning) {
-        Write-Host "$Current is already running."
-    }
-    else {
-        Write-Host "$Current exists but is stopped. Starting it..."
+    Write-Host "Creating Nginx container..."
 
-        & $Docker start $Current
+    & $Docker run -d `
+        --name $NginxContainer `
+        --network $Network `
+        -p 8080:80 `
+        -v "${PWD}\nginx\nginx.conf:/etc/nginx/nginx.conf:ro" `
+        nginx:alpine
 
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not start existing $Current container."
-        }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create Nginx container."
     }
 
 }
 else {
+
+    $NginxRunning = & $Docker ps -q --filter "name=^$NginxContainer$"
+
+    if (-not $NginxRunning) {
+
+        Write-Host "Nginx exists but is stopped."
+        Write-Host "Starting Nginx..."
+
+        & $Docker start $NginxContainer
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not start Nginx."
+        }
+    }
+}
+
+Start-Sleep -Seconds 2
+
+$NginxRunning = & $Docker ps -q --filter "name=^$NginxContainer$"
+
+if (-not $NginxRunning) {
+
+    Write-Host "Nginx failed to start."
+
+    & $Docker logs $NginxContainer
+
+    throw "Nginx container is not running."
+}
+
+Write-Host "Nginx is running."
+
+# --------------------------------------------------
+# 4. Start current version if required
+# --------------------------------------------------
+
+Write-Host "[4/6] Checking current application..."
+
+$CurrentExists = & $Docker ps -aq --filter "name=^$Current$"
+
+if (-not $CurrentExists) {
 
     Write-Host "$Current does not exist. Creating it..."
 
@@ -86,23 +130,41 @@ else {
         $Image
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not create $Current container."
+        throw "Could not create $Current."
+    }
+
+}
+else {
+
+    $CurrentRunning = & $Docker ps -q --filter "name=^$Current$"
+
+    if (-not $CurrentRunning) {
+
+        Write-Host "$Current exists but is stopped."
+        Write-Host "Starting $Current..."
+
+        & $Docker start $Current
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not start $Current."
+        }
     }
 }
 
-Start-Sleep -Seconds 3
-
 Write-Host "$Current is ready."
+
 # --------------------------------------------------
-# 4. Start new version
+# 5. Start new version and health check
 # --------------------------------------------------
 
-Write-Host "[4/6] Starting $New..."
+Write-Host "[5/6] Starting $New..."
 
-$existing = & $Docker ps -aq --filter "name=^$New$"
+$NewExists = & $Docker ps -aq --filter "name=^$New$"
 
-if ($existing) {
-    Write-Host "Removing existing $New container..."
+if ($NewExists) {
+
+    Write-Host "Removing old $New container..."
+
     & $Docker rm -f $New
 }
 
@@ -113,53 +175,50 @@ if ($existing) {
     $Image
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Could not start $New"
+    throw "Could not start $New."
 }
 
 Write-Host "$New container started."
 
-# --------------------------------------------------
-# 5. Health check
-# --------------------------------------------------
-
-Write-Host "[5/6] Health checking $New..."
+Write-Host "Health checking $New..."
 
 $Healthy = $false
 
 for ($i = 1; $i -le 30; $i++) {
 
-    # Check that container is still running
     $Running = & $Docker ps -q --filter "name=^$New$"
 
     if (-not $Running) {
-        Write-Host "$New container is not running."
+
+        Write-Host "$New stopped unexpectedly."
+
+        & $Docker logs $New
+
         break
     }
 
-    # Check application health endpoint
     $healthResult = & $Docker exec $New python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5); print(r.status)" 2>&1
 
-    $exitCode = $LASTEXITCODE
+    if ($LASTEXITCODE -eq 0 -and "$healthResult" -match "200") {
 
-    Write-Host "Health check response: $healthResult"
-
-    if ($exitCode -eq 0 -and "$healthResult" -match "200") {
         $Healthy = $true
+
         Write-Host "$New is healthy!"
+
         break
     }
 
     Write-Host "Waiting for application... ($i/30)"
+
     Start-Sleep -Seconds 2
 }
 
 if (-not $Healthy) {
 
     Write-Host "Health check failed."
-    Write-Host "Container logs:"
-    & $Docker logs $New
-
     Write-Host "Rolling back..."
+
+    & $Docker logs $New
 
     & $Docker rm -f $New
 
@@ -189,6 +248,9 @@ Write-Host "Testing Nginx configuration..."
 if ($LASTEXITCODE -ne 0) {
 
     Write-Host "Nginx configuration failed."
+
+    & $Docker logs $NginxContainer
+
     Write-Host "Rolling back..."
 
     Copy-Item $Backup $NginxConfig -Force
@@ -200,13 +262,19 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nginx configuration test failed."
 }
 
+Write-Host "Nginx configuration is valid."
+
+# --------------------------------------------------
 # Reload Nginx
+# --------------------------------------------------
+
+Write-Host "Reloading Nginx..."
+
 & $Docker exec $NginxContainer nginx -s reload
 
 if ($LASTEXITCODE -ne 0) {
 
     Write-Host "Nginx reload failed."
-    Write-Host "Rolling back..."
 
     Copy-Item $Backup $NginxConfig -Force
 
@@ -220,12 +288,12 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Traffic switched to $New."
 
 # --------------------------------------------------
-# Test application through Nginx
+# Test through Nginx
 # --------------------------------------------------
 
 Write-Host "Testing application through Nginx..."
 
-& $Docker run --rm `
+$TestResult = & $Docker run --rm `
     --network $Network `
     python:3.12-slim `
     python -c "import urllib.request; r=urllib.request.urlopen('http://$NginxContainer/', timeout=5); print('HTTP STATUS:', r.status); print(r.read().decode()); exit(0 if r.status == 200 else 1)"
@@ -233,7 +301,6 @@ Write-Host "Testing application through Nginx..."
 if ($LASTEXITCODE -ne 0) {
 
     Write-Host "Application test failed."
-    Write-Host "Rolling back..."
 
     Copy-Item $Backup $NginxConfig -Force
 
@@ -252,7 +319,7 @@ Write-Host "Application is responding through Nginx."
 
 Write-Host "Removing old version: $Current..."
 
-& $Docker rm -f $Current 2>$null
+& $Docker rm -f $Current
 
 Remove-Item $Backup -Force -ErrorAction SilentlyContinue
 
