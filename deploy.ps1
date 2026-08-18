@@ -59,58 +59,18 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "[3/6] Checking Nginx..."
 
-$NginxExists = & $Docker ps -aq --filter "name=^$NginxContainer$"
-
-if (-not $NginxExists) {
-
-    Write-Host "Nginx container does not exist."
-
-    Write-Host "Creating Nginx container..."
-
-    & $Docker run -d `
-        --name $NginxContainer `
-        --network $Network `
-        -p 8080:80 `
-        -v "${PWD}\nginx\nginx.conf:/etc/nginx/nginx.conf:ro" `
-        nginx:alpine
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not create Nginx container."
-    }
-
-}
-else {
-
-    $NginxRunning = & $Docker ps -q --filter "name=^$NginxContainer$"
-
-    if (-not $NginxRunning) {
-
-        Write-Host "Nginx exists but is stopped."
-        Write-Host "Starting Nginx..."
-
-        & $Docker start $NginxContainer
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not start Nginx."
-        }
-    }
-}
-
-Start-Sleep -Seconds 2
-
 $NginxRunning = & $Docker ps -q --filter "name=^$NginxContainer$"
 
 if (-not $NginxRunning) {
 
-    Write-Host "Nginx failed to start."
+    Write-Host "Nginx is not running."
 
-    & $Docker logs $NginxContainer
+    & $Docker ps -a --filter "name=^$NginxContainer$"
 
-    throw "Nginx container is not running."
+    throw "Nginx container is not running. Please start demo-nginx first."
 }
 
 Write-Host "Nginx is running."
-
 # --------------------------------------------------
 # 4. Start current version if required
 # --------------------------------------------------
