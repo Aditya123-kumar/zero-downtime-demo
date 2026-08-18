@@ -55,13 +55,29 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "[3/6] Checking current application..."
 
-$CurrentRunning = & $Docker ps -q --filter "name=^$Current$"
+$CurrentContainer = & $Docker ps -aq --filter "name=^$Current$"
 
-if (-not $CurrentRunning) {
+if ($CurrentContainer) {
 
-    Write-Host "$Current is not running. Starting it..."
+    $CurrentRunning = & $Docker ps -q --filter "name=^$Current$"
 
-    & $Docker rm -f $Current 2>$null
+    if ($CurrentRunning) {
+        Write-Host "$Current is already running."
+    }
+    else {
+        Write-Host "$Current exists but is stopped. Starting it..."
+
+        & $Docker start $Current
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not start existing $Current container."
+        }
+    }
+
+}
+else {
+
+    Write-Host "$Current does not exist. Creating it..."
 
     & $Docker run -d `
         --name $Current `
@@ -70,14 +86,13 @@ if (-not $CurrentRunning) {
         $Image
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Could not start $Current"
+        throw "Could not create $Current container."
     }
-
-    Start-Sleep -Seconds 2
 }
 
-Write-Host "$Current is ready."
+Start-Sleep -Seconds 3
 
+Write-Host "$Current is ready."
 # --------------------------------------------------
 # 4. Start new version
 # --------------------------------------------------
