@@ -117,74 +117,39 @@ Write-Host "$Current is ready."
 # 5. Start new version and health check
 # --------------------------------------------------
 
-Write-Host "[5/6] Starting $New..."
-
-$NewExists = & $Docker ps -aq --filter "name=^$New$"
-
-if ($NewExists) {
-
-    Write-Host "Removing old $New container..."
-
-    & $Docker rm -f $New
-}
-
-& $Docker run -d `
-    --name $New `
-    --network $Network `
-    -e VERSION=$New `
-    $Image
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not start $New."
-}
-
-Write-Host "$New container started."
-
 Write-Host "Health checking $New..."
 
+$MaxRetries = 12
+$RetryDelay = 2
 $Healthy = $false
 
-for ($i = 1; $i -le 30; $i++) {
+for ($i = 1; $i -le $MaxRetries; $i++) {
 
-    $Running = & $Docker ps -q --filter "name=^$New$"
+    Write-Host "Health check attempt $i/$MaxRetries..."
 
-    if (-not $Running) {
+    try {
+        $healthResult = & $Docker exec $New python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5); print(r.status); print(r.read().decode())" 2>&1
 
-        Write-Host "$New stopped unexpectedly."
-
-        & $Docker logs $New
-
-        break
+        if ($LASTEXITCODE -eq 0 -and $healthResult -match "200") {
+            Write-Host "Health check passed!"
+            Write-Host $healthResult
+            $Healthy = $true
+            break
+        }
+    }
+    catch {
+        Write-Host "Health check failed. Retrying..."
     }
 
-    $healthResult = & $Docker exec $New python -c "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5); print(r.status)" 2>&1
-
-    if ($LASTEXITCODE -eq 0 -and "$healthResult" -match "200") {
-
-        $Healthy = $true
-
-        Write-Host "$New is healthy!"
-
-        break
-    }
-
-    Write-Host "Waiting for application... ($i/30)"
-
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds $RetryDelay
 }
 
 if (-not $Healthy) {
-
-    Write-Host "Health check failed."
-    Write-Host "Rolling back..."
-
+    Write-Host "Health check failed after $MaxRetries attempts."
+    Write-Host "Container logs:"
     & $Docker logs $New
-
-    & $Docker rm -f $New
-
-    throw "Deployment failed because health check failed."
+    throw "New version failed health check."
 }
-
 # --------------------------------------------------
 # 6. Switch Nginx traffic
 # --------------------------------------------------
